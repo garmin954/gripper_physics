@@ -77,8 +77,8 @@ export function initControlsOverlay() {
         <div class="control-item"><span class="control-key">A</span><span class="control-key">D</span><span class="control-desc">左右移动</span></div>
         <div class="control-item"><span class="control-key">Q</span><span class="control-key">E</span><span class="control-desc">上下移动</span></div>
         <div class="control-item"><span class="control-key">[</span><span class="control-key">]</span><span class="control-desc">夹爪闭合 / 打开</span></div>
-        <div class="control-item" style="margin-top: 12px; font-size: 11px; opacity: 0.6;">
-            <span>鼠标右键旋转视角 | 滚轮缩放</span>
+        <div class="control-item" style="margin-top: 12px; font-size: 12px; opacity: 0.6;">
+            <span>鼠标右键旋转视角，滚轮缩放</span>
         </div>
     `;
     document.body.appendChild(overlay);

@@ -61,7 +61,7 @@ export async function loadGripperModel(
             },
             (xhr) => {
                 if (xhr.lengthComputable && onProgress) {
-                    const percent = Math.round((xhr.loaded / xhr.total) * 100);
+                    const percent = Math.min(Math.round((xhr.loaded / xhr.total) * 100), 100);
                     onProgress(percent);
                 }
             },
