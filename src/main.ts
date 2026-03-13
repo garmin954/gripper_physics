@@ -56,7 +56,7 @@ async function main() {
     // 3. 加载 GLB 模型部件
     let gripper: any = null;
     try {
-        gripper = await loadGripperModel('/gripperg2.glb');
+        gripper = await loadGripperModel('src/assets/gripperg2.glb');
         if (!gripper) {
             throw new Error('模型加载失败');
         }
