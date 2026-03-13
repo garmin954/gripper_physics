@@ -78,6 +78,33 @@ export class PhysicsWorld {
         this.world.createCollider(groundDesc, this.world.createRigidBody(RAPIER.RigidBodyDesc.fixed().setTranslation(0, -0.1, 0)));
     }
 
+    public addTestCube(cube: THREE.Object3D, halfExtents: THREE.Vector3 = new THREE.Vector3(0.1, 0.1, 0.1)) {
+        cube.updateWorldMatrix(true, false);
+        const position = new THREE.Vector3();
+        const quaternion = new THREE.Quaternion();
+        const scale = new THREE.Vector3();
+        cube.matrixWorld.decompose(position, quaternion, scale);
+
+        const rb = this.world.createRigidBody(
+            RAPIER.RigidBodyDesc.dynamic()
+                .setTranslation(position.x, position.y, position.z)
+                .setRotation({ x: quaternion.x, y: quaternion.y, z: quaternion.z, w: quaternion.w })
+                .setLinearDamping(0.2)
+                .setAngularDamping(0.3)
+        );
+
+        const colliderDesc = RAPIER.ColliderDesc.cuboid(
+            halfExtents.x * scale.x,
+            halfExtents.y * scale.y,
+            halfExtents.z * scale.z
+        )
+            .setFriction(0.8)
+            .setRestitution(0.05);
+
+        this.world.createCollider(colliderDesc, rb);
+        this.partRigidBodies.set(cube, rb);
+    }
+
     public addGripperParts(parts: GripperParts) {
         // 遍历所有的部件并创建对应的 RigidBody 与 Collider
         const allParts = [
