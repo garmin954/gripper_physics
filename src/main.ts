@@ -55,11 +55,24 @@ async function main() {
     physics.addTestCube(testCube, new THREE.Vector3(0.2, 0.2, 0.2));
 
     // 3. 加载 GLB 模型部件
+    const overlay = document.getElementById('loading-overlay');
+    const barFill = document.getElementById('progress-bar-fill');
+    const progressText = document.getElementById('progress-text');
+
     let gripper: any = null;
     try {
-        gripper = await loadGripperModel(gripperModelUrl);
+        gripper = await loadGripperModel(gripperModelUrl, (percent) => {
+            if (barFill) barFill.style.width = `${percent}%`;
+            if (progressText) progressText.textContent = `${percent}%`;
+        });
+
         if (!gripper) {
             throw new Error('模型加载失败');
+        }
+
+        // 隐藏加载等待
+        if (overlay) {
+            overlay.classList.add('fade-out');
         }
 
         // 调整模型初始姿态：让爪头向下

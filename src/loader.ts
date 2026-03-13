@@ -28,30 +28,47 @@ export interface GripperModel {
     parts: GripperParts;
 }
 
-export async function loadGripperModel(url: string): Promise<GripperModel | null> {
-    const gltf = await loader.loadAsync(url);
-    const scene = gltf.scene;
-    const root = scene.getObjectByName("gripper_g2")
-    if (!root) {
-        return null
-    }
+export async function loadGripperModel(
+    url: string, 
+    onProgress?: (percent: number) => void
+): Promise<GripperModel | null> {
+    return new Promise((resolve, reject) => {
+        loader.load(
+            url,
+            (gltf) => {
+                const scene = gltf.scene;
+                const root = scene.getObjectByName("gripper_g2");
+                if (!root) {
+                    resolve(null);
+                    return;
+                }
 
-    const parts = {
-        left: {
-            splint: root.getObjectByName("splint_l"),
-            support: root.getObjectByName("support_l"),
-            tie: root.getObjectByName("tie_l")
-        },
-        right: {
-            splint: root.getObjectByName("splint_r"),
-            support: root.getObjectByName("support_r"),
-            tie: root.getObjectByName("tie_r")
-        },
-        base: root.getObjectByName("case")
-    }
+                const parts = {
+                    left: {
+                        splint: root.getObjectByName("splint_l"),
+                        support: root.getObjectByName("support_l"),
+                        tie: root.getObjectByName("tie_l")
+                    },
+                    right: {
+                        splint: root.getObjectByName("splint_r"),
+                        support: root.getObjectByName("support_r"),
+                        tie: root.getObjectByName("tie_r")
+                    },
+                    base: root.getObjectByName("case")
+                };
 
-    return {
-        scene,
-        parts
-    };
+                resolve({ scene, parts });
+            },
+            (xhr) => {
+                if (xhr.lengthComputable && onProgress) {
+                    const percent = Math.round((xhr.loaded / xhr.total) * 100);
+                    onProgress(percent);
+                }
+            },
+            (error) => {
+                console.error("加载 GLB 失败:", error);
+                reject(error);
+            }
+        );
+    });
 }
