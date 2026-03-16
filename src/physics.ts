@@ -11,6 +11,12 @@ const ENVIRONMENT_GROUP = (0x0001 << 16) | 0xFFFF;
 
 const YAXIS = { x: 0, y: 1, z: 0 };
 
+// 将世界坐标转换为局部坐标
+function worldPointToLocal(point: THREE.Vector3, origin: THREE.Vector3, rotation: THREE.Quaternion): THREE.Vector3 {
+    const inverseRotation = rotation.clone().invert();
+    return point.clone().sub(origin).applyQuaternion(inverseRotation);
+}
+
 function getLocalVertices(obj: THREE.Object3D): { vertices: Float32Array, indices: Uint32Array } | null {
     const vertices: number[] = [];
     const indices: number[] = [];
@@ -69,9 +75,15 @@ export class PhysicsWorld {
     public partRigidBodies: Map<THREE.Object3D, RAPIER.RigidBody> = new Map();
     public initialRotations: Map<THREE.Object3D, THREE.Quaternion> = new Map();
     public initialTranslations: Map<THREE.Object3D, THREE.Vector3> = new Map();
-    public baseRigidBodies: { rb: RAPIER.RigidBody, initialPos: THREE.Vector3 }[] = [];
+    public gripperDynamicBodies: Map<number, RAPIER.RigidBody> = new Map();
     // 专门存储 tie 的电机关节
     public tieJoints: Map<"left" | "right", RAPIER.RevoluteImpulseJoint> = new Map();
+    // 夹爪底座的刚体
+    public gripperBaseBody: RAPIER.RigidBody | null = null;
+    // 夹爪底座的初始位置
+    public gripperBaseInitialPos: THREE.Vector3 | null = null;
+    // 夹爪底座的初始旋转
+    public gripperBaseInitialRot: THREE.Quaternion | null = null;
 
     constructor() {
         // 重力设为很小或者 0，以便观察纯机械逻辑
@@ -80,13 +92,18 @@ export class PhysicsWorld {
 
         // 增大求解器迭代次数，让关节约束更精确、更"硬"
         // 将迭代次数提升至 128，极大增强关节在运动时的抗变形能力
-        this.world.numSolverIterations = 32;
+        this.world.numSolverIterations = 64;
         // 增加内部投影高斯-赛德尔（PGS）迭代次数，增强关节精度
         this.world.numInternalPgsIterations = 10;
 
         // 设置地板，分入 ENVIRONMENT_GROUP
         const groundDesc = RAPIER.ColliderDesc.cuboid(10, 0.1, 10).setCollisionGroups(ENVIRONMENT_GROUP);
         this.world.createCollider(groundDesc, this.world.createRigidBody(RAPIER.RigidBodyDesc.fixed().setTranslation(0, -0.1, 0)));
+    }
+
+    // 注册夹爪的动态刚体
+    private registerGripperDynamicBody(rb: RAPIER.RigidBody) {
+        this.gripperDynamicBodies.set(rb.handle, rb);
     }
 
     // 添加测试方块
@@ -123,6 +140,31 @@ export class PhysicsWorld {
 
     // 添加夹爪部件
     public addGripperParts(parts: GripperParts) {
+        const baseReferencePart =
+            parts.base
+            ?? parts.left.support
+            ?? parts.right.support
+            ?? parts.left.tie
+            ?? parts.right.tie
+            ?? parts.left.splint
+            ?? parts.right.splint;
+
+        if (baseReferencePart) {
+            baseReferencePart.updateWorldMatrix(true, false);
+            const basePosition = new THREE.Vector3();
+            const baseQuaternion = new THREE.Quaternion();
+            const baseScale = new THREE.Vector3();
+            baseReferencePart.matrixWorld.decompose(basePosition, baseQuaternion, baseScale);
+
+            this.gripperBaseBody = this.world.createRigidBody(
+                RAPIER.RigidBodyDesc.kinematicPositionBased()
+                    .setTranslation(basePosition.x, basePosition.y, basePosition.z)
+                    .setRotation({ x: baseQuaternion.x, y: baseQuaternion.y, z: baseQuaternion.z, w: baseQuaternion.w })
+            );
+            this.gripperBaseInitialPos = basePosition.clone();
+            this.gripperBaseInitialRot = baseQuaternion.clone();
+        }
+
         // 遍历所有的部件并创建对应的 RigidBody 与 Collider
         const allParts = [
             parts.base,
@@ -183,17 +225,24 @@ export class PhysicsWorld {
         rbSplint.setBodyType(RAPIER.RigidBodyType.Dynamic, false);
         rbSupport.setBodyType(RAPIER.RigidBodyType.Dynamic, false);
         rbTie.setBodyType(RAPIER.RigidBodyType.Dynamic, false);
+        this.registerGripperDynamicBody(rbSplint);
+        this.registerGripperDynamicBody(rbSupport);
+        this.registerGripperDynamicBody(rbTie);
 
-        // 适度调整质量。质量过大会导致较大的惯性力加速度，从而拉开关节约束。
-        // 将附加质量降至 5.0，平衡物理真实感与稳定性。
-        rbTie.setAdditionalMass(5.0, true);
-        rbSplint.setAdditionalMass(5.0, true);
-        rbSupport.setAdditionalMass(5.0, true);
+        // 降低运动件惯性，减少整体平移时把闭合链条拉开的趋势。
+        rbTie.setAdditionalMass(0.25, true);
+        rbSplint.setAdditionalMass(0.25, true);
+        rbSupport.setAdditionalMass(0.25, true);
+        rbTie.setAdditionalSolverIterations(32);
+        rbSplint.setAdditionalSolverIterations(32);
+        rbSupport.setAdditionalSolverIterations(32);
 
         rbSplint.setLinearDamping(0.5);
         rbSupport.setLinearDamping(0.5);
         rbTie.setLinearDamping(0.5);
-        rbTie.setAngularDamping(0.5);
+        rbSplint.setAngularDamping(2.0);
+        rbSupport.setAngularDamping(2.0);
+        rbTie.setAngularDamping(2.0);
 
 
         const side_prefix = side === "left" ? "l" : "r";
@@ -205,6 +254,11 @@ export class PhysicsWorld {
         const supportDotWorld = supportDot.getWorldPosition(new THREE.Vector3());
         const tieDotWorld = tieDot.getWorldPosition(new THREE.Vector3());
         const tieCenterWorld = tie.getWorldPosition(new THREE.Vector3());
+        const baseBody = this.gripperBaseBody;
+        const basePos = this.gripperBaseInitialPos;
+        const baseRot = this.gripperBaseInitialRot;
+
+        if (!baseBody || !basePos || !baseRot) return;
 
         // 将世界坐标转换为局部坐标
         const supportAnchorFixed = support.worldToLocal(supportCenterWorld.clone());
@@ -213,23 +267,23 @@ export class PhysicsWorld {
         const tieAnchorSplint = tie.worldToLocal(tieDotWorld.clone());
         const splintAnchorTie = splint.worldToLocal(tieDotWorld.clone());
         const tieAnchorLocal = tie.worldToLocal(tieCenterWorld.clone());
+        const supportAnchorBase = worldPointToLocal(supportCenterWorld, basePos, baseRot);
+        const tieAnchorBase = worldPointToLocal(tieCenterWorld, basePos, baseRot);
 
-        // 1. Support 固定点
-        const supportQuatWorld = support.getWorldQuaternion(new THREE.Quaternion());
-        const rbSupportFixed = this.world.createRigidBody(
-            RAPIER.RigidBodyDesc.kinematicPositionBased()
-                .setTranslation(supportCenterWorld.x, supportCenterWorld.y, supportCenterWorld.z)
-                .setRotation({ x: supportQuatWorld.x, y: supportQuatWorld.y, z: supportQuatWorld.z, w: supportQuatWorld.w })
-        );
-        this.baseRigidBodies.push({ rb: rbSupportFixed, initialPos: supportCenterWorld.clone() });
+        // 1. Support 固定点挂到底座上，整个夹爪平移时共享同一个运动学参考系。
         const jointSupportFixed = this.world.createImpulseJoint(
-            RAPIER.JointData.revolute(supportAnchorFixed, { x: 0, y: 0, z: 0 }, YAXIS),
+            RAPIER.JointData.revolute(
+                supportAnchorFixed,
+                { x: supportAnchorBase.x, y: supportAnchorBase.y, z: supportAnchorBase.z },
+                YAXIS
+            ),
             rbSupport,
-            rbSupportFixed,
+            baseBody,
             true
         ) as RAPIER.RevoluteImpulseJoint;
 
         jointSupportFixed.setLimits(side === "left" ? degToRad(-30) : 0, side === "left" ? 0 : degToRad(30))
+        jointSupportFixed.setContactsEnabled(false);
 
         // 2. Splint 和 Support 连接
         this.world.createImpulseJoint(
@@ -249,27 +303,22 @@ export class PhysicsWorld {
         jointTieSplint.setLimits(side === "left" ? degToRad(-30) : 0, side === "left" ? 0 : degToRad(30))
 
 
-        // 4. 为 Tie 创建一个运动学驱动锚点 
-        const tieQuatWorld = tie.getWorldQuaternion(new THREE.Quaternion());
-        const rbTieAnchor = this.world.createRigidBody(
-            RAPIER.RigidBodyDesc.kinematicPositionBased()
-                .setTranslation(tieCenterWorld.x, tieCenterWorld.y, tieCenterWorld.z)
-                .setRotation({ x: tieQuatWorld.x, y: tieQuatWorld.y, z: tieQuatWorld.z, w: tieQuatWorld.w })
-        );
-        this.baseRigidBodies.push({ rb: rbTieAnchor, initialPos: tieCenterWorld.clone() });
-
         const jointTieToAnchor = this.world.createImpulseJoint(
-            RAPIER.JointData.revolute(tieAnchorLocal, { x: 0, y: 0, z: 0 }, YAXIS),
+            RAPIER.JointData.revolute(
+                tieAnchorLocal,
+                { x: tieAnchorBase.x, y: tieAnchorBase.y, z: tieAnchorBase.z },
+                YAXIS
+            ),
             rbTie,
-            rbTieAnchor,
+            baseBody,
             true
         ) as RAPIER.RevoluteImpulseJoint;
         jointTieToAnchor.setLimits(side === "left" ? degToRad(-30) : 0, side === "left" ? 0 : degToRad(30))
 
 
         // 这里就是主驱动电机！
-        // 调整电机刚度：恢复至 8000.0，配合更多的 solver iterations 保证稳固
-        jointTieToAnchor.configureMotorPosition(0, 20.0, 500.0);
+        jointTieToAnchor.configureMotorModel(RAPIER.MotorModel.AccelerationBased);
+        jointTieToAnchor.configureMotorPosition(0, 20000.0, 5000.0);
 
         // 禁用关节连接体之间的碰撞计算，减少内部压力导致的变形
         jointTieToAnchor.setContactsEnabled(false);
@@ -277,11 +326,22 @@ export class PhysicsWorld {
     }
 
     // 设置夹爪的平移
-    public setGripperTranslation(offset: THREE.Vector3) {
-        this.baseRigidBodies.forEach(({ rb, initialPos }) => {
-            const pos = initialPos.clone().add(offset);
-            rb.setNextKinematicTranslation(pos);
-        });
+    public setGripperTranslation(offset: THREE.Vector3, linearVelocity?: THREE.Vector3) {
+        if (!this.gripperBaseBody || !this.gripperBaseInitialPos) return;
+
+        const pos = this.gripperBaseInitialPos.clone().add(offset);
+        this.gripperBaseBody.setNextKinematicTranslation(pos);
+
+        if (this.gripperBaseInitialRot) {
+            this.gripperBaseBody.setNextKinematicRotation(this.gripperBaseInitialRot);
+        }
+
+        if (linearVelocity) {
+            const velocity = { x: linearVelocity.x, y: linearVelocity.y, z: linearVelocity.z };
+            this.gripperDynamicBodies.forEach((rb) => {
+                rb.setLinvel(velocity, true);
+            });
+        }
     }
 
     public setPartKinematicState(part: THREE.Object3D, eulerOffset: THREE.Euler, translationOffset: THREE.Vector3) {
@@ -309,10 +369,8 @@ export class PhysicsWorld {
     public setTieMotorTarget(side: "left" | "right", radians: number) {
         const joint = this.tieJoints.get(side);
         if (joint) {
-            // 注意方向：左右侧的 tie 旋转方向是对称的
-            // 大幅提高刚度（Stiffness）以抵消位移时的惯性影响
-            // 从 200.0 提升至 2000.0
-            joint.configureMotorPosition(radians, 2000.0, 500.0);
+            joint.configureMotorModel(RAPIER.MotorModel.AccelerationBased);
+            joint.configureMotorPosition(radians, 20000.0, 5000.0);
         }
     }
 

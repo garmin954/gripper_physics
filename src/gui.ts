@@ -4,7 +4,7 @@ export const guiState = {
     targetAngle: 0,
     currentAngle: 0,
     speed: 20, // 开合速度
-    moveSpeed: 2, // 0-20 移动速度
+    moveSpeed: 5, // 0-20 移动速度
     showDebugLines: false, // 是否显示物理辅助线
     posX: 0,
     posY: 0,

@@ -14,7 +14,7 @@ async function main() {
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0xf0f4f8); // 改为明亮的浅灰蓝色
     const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-    camera.position.set(0, 5, 5);
+    camera.position.set(0, 2, 5);
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
     document.body.appendChild(renderer.domElement);
@@ -101,23 +101,28 @@ async function main() {
         new THREE.LineBasicMaterial({ color: 0xffffff, vertexColors: true })
     );
 
-
     scene.add(debugLines);
+    const clock = new THREE.Clock();
+    const currentMoveVelocity = new THREE.Vector3();
+    const targetMoveVelocity = new THREE.Vector3();
+    const moveResponse = 12;
 
     // 7. 动画循环
     function animate() {
         requestAnimationFrame(animate);
 
-        // 计算基于帧率的速度积分（这里用固定系数 0.016 简化约等 60fps，也可以引入 THREE.Clock）
-        const deltaTime = 0.016;
+        const deltaTime = Math.min(clock.getDelta(), 0.033);
 
-        guiState.posX += guiState.moveDir.x * guiState.moveSpeed * deltaTime;
-        guiState.posY += guiState.moveDir.y * guiState.moveSpeed * deltaTime;
-        guiState.posZ += guiState.moveDir.z * guiState.moveSpeed * deltaTime;
+        targetMoveVelocity
+            .set(guiState.moveDir.x, guiState.moveDir.y, guiState.moveDir.z)
+            .multiplyScalar(guiState.moveSpeed);
 
-        if (gripper) {
-            gripper.scene.position.set(0 + guiState.posX, 2 + guiState.posY, 0 + guiState.posZ);
-        }
+        const blend = 1 - Math.exp(-moveResponse * deltaTime);
+        currentMoveVelocity.lerp(targetMoveVelocity, blend);
+
+        guiState.posX += currentMoveVelocity.x * deltaTime;
+        guiState.posY += currentMoveVelocity.y * deltaTime;
+        guiState.posZ += currentMoveVelocity.z * deltaTime;
 
         // a. 更新主动件 tie 的变换
         if (gripper && gripper.parts.left.tie) {
@@ -142,7 +147,7 @@ async function main() {
             physics.setTieMotorTarget('right', rad);
 
             // 同步移动负责支撑的隐形地基轴/锚点 (同步平移)
-            physics.setGripperTranslation(offset);
+            physics.setGripperTranslation(offset, currentMoveVelocity);
 
             // 同步移动外壳(case/base)等没被额外驱动但必须参与运动学更新的刚体
             if (gripper.parts.base) {
